@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
+import 'package:just_audio/just_audio.dart';
 import 'audio_manager.dart';
 import 'models.dart';
 import 'dart:async';
@@ -33,6 +34,7 @@ class SessionScreen extends StatefulWidget {
 class _SessionScreenState extends State<SessionScreen> {
   final AudioManager _audioManager = AudioManager();
   final AudioRecorder _audioRecorder = AudioRecorder();
+  final Map<int, AudioPlayer> _players = {}; // One player per track
   bool _isRecording = false;
   final Session _currentSession = Session('New Session', []);
   String? _currentRecordingPath;
@@ -57,6 +59,7 @@ class _SessionScreenState extends State<SessionScreen> {
     _recordSub?.cancel();
     _recordingTimer?.cancel();
     _audioRecorder.dispose();
+    _players.values.forEach((player) => player.dispose());
     super.dispose();
   }
 
@@ -77,7 +80,6 @@ class _SessionScreenState extends State<SessionScreen> {
 
         // Configure recording options
         final audioConfig = RecordConfig(encoder: AudioEncoder.wav, bitRate: 128000, sampleRate: 44100);
-
         // Start recording
         await _audioRecorder.start(audioConfig, path: path);
 
@@ -107,12 +109,47 @@ class _SessionScreenState extends State<SessionScreen> {
     if (path != null) {
       // Add the recording to the session
       _currentSession.tracks.add(Track(path, Duration.zero));
-
       setState(() {
         _currentRecordingPath = null;
         _recordDuration = 0;
       });
     }
+  }
+
+  Future<void> _playTrack(int index) async {
+    final track = _currentSession.tracks[index];
+    AudioPlayer? player = _players[index];
+
+    if (player == null) {
+      player = AudioPlayer();
+      _players[index] = player;
+      await player.setFilePath(track.filePath);
+    }
+
+    if (player.playing) {
+      await player.stop();
+    } else {
+      await player.play();
+    }
+    setState(() {}); // Update UI for play/stop icon
+  }
+
+  Future<void> _playAllTracks() async {
+    // Stop any currently playing tracks
+    await Future.wait(_players.values.map((player) => player.stop()));
+
+    // Initialize players for all tracks if not already done
+    for (int i = 0; i < _currentSession.tracks.length; i++) {
+      if (!_players.containsKey(i)) {
+        final player = AudioPlayer();
+        await player.setFilePath(_currentSession.tracks[i].filePath);
+        _players[i] = player;
+      }
+    }
+
+    // Play all tracks simultaneously
+    await Future.wait(_players.values.map((player) => player.play()));
+    setState(() {}); // Update UI
   }
 
   String _formatDuration(int seconds) {
@@ -126,22 +163,11 @@ class _SessionScreenState extends State<SessionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Bloomix Session'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.playlist_add),
-            onPressed:
-                _currentSession.tracks.isEmpty
-                    ? null
-                    : () {
-                      // TODO: Implement playback of all tracks
-                    },
-          ),
-        ],
+        actions: [IconButton(icon: const Icon(Icons.playlist_add), onPressed: _currentSession.tracks.isEmpty ? null : _playAllTracks, tooltip: 'Play All Tracks')],
       ),
       body: Column(
         children: [
           const Padding(padding: EdgeInsets.all(16.0), child: Text('Welcome to your music prototyping space!')),
-
           if (_isRecording)
             Padding(
               padding: const EdgeInsets.all(16.0),
@@ -154,7 +180,6 @@ class _SessionScreenState extends State<SessionScreen> {
                 ],
               ),
             ),
-
           Expanded(
             child:
                 _currentSession.tracks.isEmpty
@@ -163,16 +188,13 @@ class _SessionScreenState extends State<SessionScreen> {
                       itemCount: _currentSession.tracks.length,
                       itemBuilder: (context, index) {
                         final track = _currentSession.tracks[index];
+                        final player = _players[index];
+                        final isPlaying = player?.playing ?? false;
                         return ListTile(
                           leading: const Icon(Icons.audio_file),
                           title: Text('Track ${index + 1}'),
                           subtitle: Text(track.filePath.split('/').last),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.play_arrow),
-                            onPressed: () {
-                              // TODO: Implement single track playback
-                            },
-                          ),
+                          trailing: IconButton(icon: Icon(isPlaying ? Icons.stop : Icons.play_arrow), onPressed: () => _playTrack(index)),
                         );
                       },
                     ),
